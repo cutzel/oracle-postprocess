@@ -96,6 +96,8 @@ fn walk(el: &mut Element, total: &u64, counter: &mut u64, oracle_url: &String, k
                     .captures(source)
                     .and_then(|it| it.get(1).map(|it| it.as_str()));
 
+                let watermark = source.lines().take(6).collect::<Vec<_>>().join("\n");
+
                 if let Some(bytecode) = b64_bytecode {
                     let start = SystemTime::now();
                     
@@ -114,7 +116,7 @@ fn walk(el: &mut Element, total: &u64, counter: &mut u64, oracle_url: &String, k
                             match dec.status() {
                                 StatusCode::OK => {
                                     if let Ok(deserialized) = dec.text() {
-                                        n.children[0] = XMLNode::CData(deserialized);
+                                        n.children[0] = XMLNode::CData(vec![watermark, deserialized].join("\n"));
                                     }
 
                                     let elapsed = start.elapsed()
