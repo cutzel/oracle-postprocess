@@ -1,3 +1,5 @@
 /target
-place.rbxlx
-out.rbxlx
+*.rbxlx
+*.zip
+*.lua
+.env
