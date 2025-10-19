@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{client::IntoClientRequest, Message},
+    tungstenite::{client::IntoClientRequest, Bytes, Message},
     MaybeTlsStream, WebSocketStream,
 };
 
@@ -103,8 +103,17 @@ impl Decompiler {
             HashMap::new();
         let mut queued_requests: Vec<DecompilationRequest> = Vec::new();
 
+        let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(20));
+        ping_interval.tick().await;
+
         loop {
             tokio::select! {
+                _ = ping_interval.tick() => {
+                    if let Err(e) = write.send(Message::Ping(Bytes::from_static(b"ping"))).await {
+                        eprintln!("error: failed to send ping (connection lost): {}", e);
+                        std::process::exit(1);
+                    }
+                }
                 message = read.next() => {
                     let text = match message {
                         Some(Ok(Message::Text(text))) => text,
