@@ -28,7 +28,7 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Adds files to myapp
+    /// Process a .rbxlx file
     Rbxlx {
         /// Input file path
         input: String,
@@ -38,6 +38,7 @@ enum Commands {
         #[arg(short, long, verbatim_doc_comment, default_value = "processed.rbxlx")]
         output: String,
     },
+    /// Process a single bytecode file
     Single {
         /// Input file path
         input: String,
