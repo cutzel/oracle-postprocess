@@ -114,10 +114,15 @@ pub async fn process_rbxlx_file(
                 let (dec_tx, dec_rx) = oneshot::channel::<Result<String, String>>();
                 let cdata_string = String::from_utf8(bob.to_vec()).unwrap();
 
-                let bytecode_start = "-- Bytecode (Base64):\n-- ";
+                let bytecode_start_lf = "-- Bytecode (Base64):\n-- ";
+                let bytecode_start_crlf = "-- Bytecode (Base64):\r\n-- ";
+                
                 let bytecode_position = cdata_string
-                    .find(bytecode_start)
-                    .map(|it| it + bytecode_start.len());
+                    .find(bytecode_start_lf)
+                    .map(|it| it + bytecode_start_lf.len())
+                    .or_else(|| cdata_string
+                        .find(bytecode_start_crlf)
+                        .map(|it| it + bytecode_start_crlf.len()));
 
                 let Some(position) = bytecode_position else {
                     write_tx
@@ -129,7 +134,7 @@ pub async fn process_rbxlx_file(
                 total_scripts.fetch_add(1, Ordering::Relaxed);
 
                 let bytecode_end = cdata_string[position..]
-                    .find('\n')
+                    .find(|c| c == '\n' || c == '\r')
                     .map(|idx| position + idx)
                     .unwrap_or(cdata_string.len());
 

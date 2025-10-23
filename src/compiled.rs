@@ -36,14 +36,23 @@ pub fn get_bytecode_from_file(
 
     // try extracting from rbxlx-style header
     let file_string = String::from_utf8_lossy(&file_contents);
-    let bytecode_start = "-- Bytecode (Base64):\n-- ";
+    
+    let bytecode_start_lf = "-- Bytecode (Base64):\n-- ";
+    let bytecode_start_crlf = "-- Bytecode (Base64):\r\n-- ";
 
-    if let Some(position) = file_string.find(bytecode_start) {
-        let start_pos = position + bytecode_start.len();
+    let (position, bytecode_start_len) = file_string
+        .find(bytecode_start_lf)
+        .map(|pos| (pos, bytecode_start_lf.len()))
+        .or_else(|| file_string
+            .find(bytecode_start_crlf)
+            .map(|pos| (pos, bytecode_start_crlf.len())))
+        .unzip();
 
-        // find the newline at the end of the bytecode line
+    if let (Some(position), Some(bytecode_start_len)) = (position, bytecode_start_len) {
+        let start_pos = position + bytecode_start_len;
+
         let bytecode_end = file_string[start_pos..]
-            .find('\n')
+            .find(|c| c == '\n' || c == '\r')
             .map(|idx| start_pos + idx)
             .unwrap_or(file_string.len());
 
