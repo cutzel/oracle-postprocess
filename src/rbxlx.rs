@@ -49,7 +49,13 @@ pub async fn process_rbxlx_file(
                     bytecode,
                     rx,
                 } => {
-                    let result = rx.await.unwrap();
+                    let result = match rx.await {
+                        Ok(it) => it,
+                        Err(_) => {
+                            eprintln!("error: decompilation response never received (sender dropped)");
+                            Err("oracle-postprocess error: sender dropped".to_string())
+                        }
+                    };
                     let result = match result {
                         Ok(it) => format!("-- decompilation:\n{}", it),
                         Err(it) => format!("-- decompilation failed:\n-- {}", it),

@@ -150,7 +150,8 @@ impl Decompiler {
                     };
 
                     for request in requests {
-                        request.tx.send(result.clone()).unwrap();
+                        // If the receiver was dropped, just ignore it
+                        let _ = request.tx.send(result.clone());
                     }
 
                     // try to send queued requests now that we have space
@@ -174,10 +175,16 @@ impl Decompiler {
 
                         bytes_in_flight.fetch_add(queued_request.bytecode_len, Ordering::Relaxed);
                         let bytecode_len = queued_request.bytecode_len;
-                        pending_requests.insert(
-                            queued_request.bytecode_hash.clone(),
-                            (vec![queued_request], bytecode_len)
-                        );
+                        
+                        // Check if there's already a pending request for this hash (from duplicate)
+                        if let Some((existing_requests, _)) = pending_requests.get_mut(&queued_request.bytecode_hash) {
+                            existing_requests.push(queued_request);
+                        } else {
+                            pending_requests.insert(
+                                queued_request.bytecode_hash.clone(),
+                                (vec![queued_request], bytecode_len)
+                            );
+                        }
                     }
                     queued_requests = remaining_queue;
                 }
