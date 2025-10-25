@@ -112,7 +112,13 @@ pub async fn process_rbxlx_file(
             Ok(Event::Eof) => break,
             Ok(Event::CData(bob)) => {
                 let (dec_tx, dec_rx) = oneshot::channel::<Result<String, String>>();
-                let cdata_string = String::from_utf8(bob.to_vec()).unwrap();
+                let Ok(cdata_string) = String::from_utf8(bob.to_vec()) else {
+                    // If CDATA is not valid UTF-8, just pass it through
+                    write_tx
+                        .send(ToWrite::XmlEvent(Event::CData(bob.into_owned())))
+                        .unwrap();
+                    continue;
+                };
 
                 let bytecode_start_lf = "-- Bytecode (Base64):\n-- ";
                 let bytecode_start_crlf = "-- Bytecode (Base64):\r\n-- ";
