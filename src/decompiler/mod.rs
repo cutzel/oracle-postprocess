@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{client::IntoClientRequest, Bytes, Message},
+    connect_async_with_config,
+    tungstenite::{client::IntoClientRequest, protocol::WebSocketConfig, Bytes, Message},
     MaybeTlsStream, WebSocketStream,
 };
 
@@ -65,7 +65,8 @@ impl Decompiler {
             .headers_mut()
             .insert("Authorization", format!("Bearer {}", auth_token).parse()?);
 
-        let ws_connect = connect_async(request).await;
+        let ws_config = WebSocketConfig::default().max_frame_size(Some(512 * 1024 * 1024)).max_message_size(Some(512 * 1024 * 1024));
+        let ws_connect = connect_async_with_config(request, Some(ws_config), false).await;
 
         let ws_stream = match ws_connect {
             Ok((ws_stream, _)) => ws_stream,
