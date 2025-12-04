@@ -61,7 +61,8 @@ pub async fn process_rbxlx_file(
                         Err(it) => format!("-- decompilation failed:\n-- {}", it),
                     };
                     let formatted_result = format!("{}{}\n\n{}\n", header, bytecode, result);
-                    let event = Event::CData(BytesCData::new(formatted_result));
+                    let escaped_result = formatted_result.replace("]]>", "]]]]><![CDATA[>");
+                    let event = Event::CData(BytesCData::new(escaped_result));
 
                     decompiled_count_clone.fetch_add(1, Ordering::Relaxed);
                     writer.write_event(event).unwrap();
