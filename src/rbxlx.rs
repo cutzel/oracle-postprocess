@@ -29,10 +29,13 @@ pub async fn process_rbxlx_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total_scripts = Arc::new(AtomicU32::new(0));
     let decompiled_count = Arc::new(AtomicU32::new(0));
+    let total_events = Arc::new(AtomicU32::new(0));
+    let written_events = Arc::new(AtomicU32::new(0));
     let reader_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let (write_tx, mut write_rx) = mpsc::unbounded_channel::<ToWrite>();
     let decompiled_count_clone = decompiled_count.clone();
+    let written_events_clone = written_events.clone();
     let output_file = output_file.to_string();
     let writer_handle = tokio::spawn(async move {
         let file = File::create(&output_file).expect("failed to create output file");
@@ -68,6 +71,7 @@ pub async fn process_rbxlx_file(
                     writer.write_event(event).unwrap();
                 }
             }
+            written_events_clone.fetch_add(1, Ordering::Relaxed);
         }
 
         use std::io::Write;
@@ -84,6 +88,8 @@ pub async fn process_rbxlx_file(
 
     let decompiled_count_clone = decompiled_count.clone();
     let total_scripts_clone_progress = total_scripts.clone();
+    let total_events_clone = total_events.clone();
+    let written_events_clone = written_events.clone();
     let reader_done_clone = reader_done.clone();
     let progress_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
@@ -91,18 +97,24 @@ pub async fn process_rbxlx_file(
             interval.tick().await;
             let decompiled = decompiled_count_clone.load(Ordering::Relaxed);
             let total = total_scripts_clone_progress.load(Ordering::Relaxed);
+            let total_ev = total_events_clone.load(Ordering::Relaxed);
+            let written_ev = written_events_clone.load(Ordering::Relaxed);
             let is_reader_done = reader_done_clone.load(Ordering::Relaxed);
 
-            if total > 0 {
-                println!(
-                    "decompilation progress: {}/{} ({:.1}%)",
-                    decompiled,
-                    total,
-                    (decompiled as f64 / total as f64) * 100.0
-                );
+            if total_ev > 0 {
+                let write_pct = (written_ev as f64 / total_ev as f64) * 100.0;
+                if total > 0 {
+                    let decompile_pct = (decompiled as f64 / total as f64) * 100.0;
+                    println!(
+                        "xml: {}/{} ({:.1}%) | decompiled: {}/{} ({:.1}%)",
+                        written_ev, total_ev, write_pct, decompiled, total, decompile_pct
+                    );
+                } else {
+                    println!("xml: {}/{} ({:.1}%)", written_ev, total_ev, write_pct);
+                }
             }
 
-            if is_reader_done && decompiled >= total && total > 0 {
+            if is_reader_done && written_ev >= total_ev && total_ev > 0 {
                 break;
             }
         }
@@ -118,6 +130,7 @@ pub async fn process_rbxlx_file(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
             Ok(Event::CData(bob)) => {
+                total_events.fetch_add(1, Ordering::Relaxed);
                 let (dec_tx, dec_rx) = oneshot::channel::<Result<String, String>>();
                 let Ok(cdata_string) = String::from_utf8(bob.to_vec()) else {
                     // If CDATA is not valid UTF-8, just pass it through
@@ -176,6 +189,7 @@ pub async fn process_rbxlx_file(
                     .unwrap();
             }
             Ok(e) => {
+                total_events.fetch_add(1, Ordering::Relaxed);
                 write_tx.send(ToWrite::XmlEvent(e.into_owned())).unwrap();
             }
             Err(e) => {
@@ -193,6 +207,10 @@ pub async fn process_rbxlx_file(
     // and now the decompiler has done its thing
     drop(write_tx);
     writer_handle.await?;
+
+    if total_scripts.load(Ordering::Relaxed) == 0 {
+        println!("no scripts found to decompile");
+    }
 
     Ok(())
 }
