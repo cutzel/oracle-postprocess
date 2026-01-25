@@ -3,18 +3,17 @@ use std::sync::{
     Arc,
 };
 
-use quick_xml::events::{BytesCData, Event};
-use quick_xml::reader::Reader;
-use quick_xml::writer::Writer;
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use tokio::sync::{mpsc, oneshot};
+use xml::reader::{EventReader, XmlEvent};
+use xml::writer::{EmitterConfig, XmlEvent as WriteXmlEvent};
 
 use crate::decompiler::{DecompilationRequest, Decompiler};
 
-enum ToWrite<'a> {
-    XmlEvent(Event<'a>),
+enum ToWrite {
+    XmlEvent(XmlEvent),
     DecompilationResult {
         header: String,
         bytecode: Arc<str>,
@@ -40,12 +39,64 @@ pub async fn process_rbxlx_file(
     let writer_handle = tokio::spawn(async move {
         let file = File::create(&output_file).expect("failed to create output file");
         let mut buf_writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
-        let mut writer = Writer::new(&mut buf_writer);
+        let mut writer = EmitterConfig::new()
+            .create_writer(&mut buf_writer);
 
         while let Some(task) = write_rx.recv().await {
             match task {
                 ToWrite::XmlEvent(e) => {
-                    writer.write_event(e).unwrap();
+                    match e {
+                        XmlEvent::StartElement { name, attributes, .. } => {
+                            use xml::name::Name;
+                            let local_name_str = name.local_name.as_str();
+                            let elem_name = Name::local(local_name_str);
+                            let builder = WriteXmlEvent::start_element(elem_name);
+                            if attributes.is_empty() {
+                                if let Err(e) = writer.write(builder) {
+                                    panic!("Write error: {e}");
+                                }
+                            } else {
+                                let final_builder = attributes.iter().fold(builder, |b, attr| {
+                                    let attr_name = Name::local(attr.name.local_name.as_str());
+                                    b.attr(attr_name, &attr.value)
+                                });
+                                if let Err(e) = writer.write(final_builder) {
+                                    panic!("Write error: {e}");
+                                }
+                            }
+                        }
+                        XmlEvent::EndElement { name: _ } => {
+                            if let Err(e) = writer.write(WriteXmlEvent::end_element()) {
+                                panic!("Write error: {e}");
+                            }
+                        }
+                        XmlEvent::CData(text) => {
+                            let text_owned = text.clone();
+                            if let Err(e) = writer.write(WriteXmlEvent::cdata(&text_owned)) {
+                                panic!("Write error: {e}");
+                            }
+                        }
+                        XmlEvent::Characters(text) => {
+                            let text_owned = text.clone();
+                            if let Err(e) = writer.write(WriteXmlEvent::characters(&text_owned)) {
+                                panic!("Write error: {e}");
+                            }
+                        }
+                        XmlEvent::Comment(text) => {
+                            let text_owned = text.clone();
+                            if let Err(e) = writer.write(WriteXmlEvent::comment(&text_owned)) {
+                                panic!("Write error: {e}");
+                            }
+                        }
+                        XmlEvent::ProcessingInstruction { .. } | XmlEvent::StartDocument { .. } => {
+                            written_events_clone.fetch_add(1, Ordering::Relaxed);
+                            continue
+                        }
+                        _ => {
+                            written_events_clone.fetch_add(1, Ordering::Relaxed);
+                            continue
+                        }
+                    }
                 }
                 ToWrite::DecompilationResult {
                     header,
@@ -65,16 +116,17 @@ pub async fn process_rbxlx_file(
                     };
                     let formatted_result = format!("{}{}\n\n{}\n", header, bytecode, result);
                     let escaped_result = formatted_result.replace("]]>", "]]]]><![CDATA[>");
-                    let event = Event::CData(BytesCData::new(escaped_result));
+                    let event = WriteXmlEvent::cdata(&escaped_result);
 
                     decompiled_count_clone.fetch_add(1, Ordering::Relaxed);
-                    writer.write_event(event).unwrap();
+                    if let Err(e) = writer.write(event) {
+                        panic!("Write error: {e}");
+                    }
                 }
             }
             written_events_clone.fetch_add(1, Ordering::Relaxed);
         }
 
-        use std::io::Write;
         if let Err(e) = buf_writer.flush() {
             println!("couldnt flush buffer: {:?}", e);
         }
@@ -121,24 +173,14 @@ pub async fn process_rbxlx_file(
     });
 
     let input_file_handle = File::open(input_file)?;
-    let mut reader =
-        Reader::from_reader(BufReader::with_capacity(8 * 1024 * 1024, input_file_handle));
-    reader.config_mut().trim_text(true);
+    let file = BufReader::with_capacity(8 * 1024 * 1024, input_file_handle);
+    let parser = EventReader::new(file);
 
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Eof) => break,
-            Ok(Event::CData(bob)) => {
+    for e in parser {
+        match e {
+            Ok(XmlEvent::CData(cdata_string)) => {
                 total_events.fetch_add(1, Ordering::Relaxed);
                 let (dec_tx, dec_rx) = oneshot::channel::<Result<String, String>>();
-                let Ok(cdata_string) = String::from_utf8(bob.to_vec()) else {
-                    // If CDATA is not valid UTF-8, just pass it through
-                    write_tx
-                        .send(ToWrite::XmlEvent(Event::CData(bob.into_owned())))
-                        .unwrap();
-                    continue;
-                };
 
                 let bytecode_start_lf = "-- Bytecode (Base64):\n-- ";
                 let bytecode_start_crlf = "-- Bytecode (Base64):\r\n-- ";
@@ -152,7 +194,7 @@ pub async fn process_rbxlx_file(
 
                 let Some(position) = bytecode_position else {
                     write_tx
-                        .send(ToWrite::XmlEvent(Event::CData(bob.into_owned())))
+                        .send(ToWrite::XmlEvent(XmlEvent::CData(cdata_string)))
                         .unwrap();
                     continue;
                 };
@@ -190,14 +232,13 @@ pub async fn process_rbxlx_file(
             }
             Ok(e) => {
                 total_events.fetch_add(1, Ordering::Relaxed);
-                write_tx.send(ToWrite::XmlEvent(e.into_owned())).unwrap();
+                write_tx.send(ToWrite::XmlEvent(e)).unwrap();
             }
             Err(e) => {
-                eprintln!("error at position {}: {:?}", reader.error_position(), e);
+                eprintln!("Error: {e}");
                 return Err(e.into());
             }
         }
-        buf.clear();
     }
 
     // and now we wait for the decompiler
