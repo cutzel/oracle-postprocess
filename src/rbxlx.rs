@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
@@ -5,7 +6,7 @@ use std::sync::{
 
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use tokio::sync::{mpsc, oneshot};
 use xml::reader::{EventReader, XmlEvent};
 use xml::writer::{EmitterConfig, XmlEvent as WriteXmlEvent};
@@ -19,6 +20,109 @@ enum ToWrite {
         bytecode: Arc<str>,
         rx: oneshot::Receiver<Result<String, String>>,
     },
+}
+
+struct Utf8BoundaryReader<R: Read> {
+    inner: R,
+    pending: Vec<u8>,
+    output: VecDeque<u8>,
+    eof: bool,
+}
+
+impl<R: Read> Utf8BoundaryReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            pending: Vec::new(),
+            output: VecDeque::new(),
+            eof: false,
+        }
+    }
+
+    fn fill_pending(&mut self) -> io::Result<()> {
+        if self.eof {
+            return Ok(());
+        }
+
+        let mut buf = [0u8; 64 * 1024];
+        let read = self.inner.read(&mut buf)?;
+        if read == 0 {
+            self.eof = true;
+        } else {
+            self.pending.extend_from_slice(&buf[..read]);
+        }
+
+        Ok(())
+    }
+
+    fn process_pending(&mut self) -> io::Result<()> {
+        loop {
+            if self.pending.is_empty() {
+                return Ok(());
+            }
+
+            fn is_xml_valid(b: &u8) -> bool {
+                *b >= 0x20 || *b == 0x09 || *b == 0x0A || *b == 0x0D
+            }
+
+            match std::str::from_utf8(&self.pending) {
+                Ok(_) => {
+                    self.output.extend(self.pending.drain(..).filter(is_xml_valid));
+                    return Ok(());
+                }
+                Err(err) => {
+                    let valid_up_to = err.valid_up_to();
+                    if valid_up_to > 0 {
+                        self.output.extend(self.pending.drain(..valid_up_to).filter(is_xml_valid));
+                        return Ok(());
+                    }
+
+                    if err.error_len().is_none() && !self.eof {
+                        self.fill_pending()?;
+                        continue;
+                    }
+
+                    let invalid_len = err.error_len().unwrap_or(1).min(self.pending.len());
+                    self.pending.drain(..invalid_len);
+                    self.output.extend([0xef, 0xbf, 0xbd]);
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+impl<R: Read> Read for Utf8BoundaryReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+
+        while self.output.is_empty() {
+            if self.pending.is_empty() && !self.eof {
+                self.fill_pending()?;
+            }
+
+            if self.pending.is_empty() && self.eof {
+                return Ok(0);
+            }
+
+            self.process_pending()?;
+        }
+
+        let mut written = 0usize;
+        while written < out.len() {
+            match self.output.pop_front() {
+                Some(b) => {
+                    out[written] = b;
+                    written += 1;
+                }
+                None => break,
+            }
+        }
+
+        Ok(written)
+    }
 }
 
 pub async fn process_rbxlx_file(
@@ -93,6 +197,7 @@ pub async fn process_rbxlx_file(
                             continue
                         }
                         _ => {
+                            println!("unknownevent: {:?}", e);
                             written_events_clone.fetch_add(1, Ordering::Relaxed);
                             continue
                         }
@@ -174,9 +279,12 @@ pub async fn process_rbxlx_file(
 
     let input_file_handle = File::open(input_file)?;
     let file = BufReader::with_capacity(8 * 1024 * 1024, input_file_handle);
-    let parser = EventReader::new(file);
+    let utf8_reader = Utf8BoundaryReader::new(file);
+    let parser = EventReader::new(utf8_reader);
 
+    let mut event_count = 0u64;
     for e in parser {
+        event_count += 1;
         match e {
             Ok(XmlEvent::CData(cdata_string)) => {
                 total_events.fetch_add(1, Ordering::Relaxed);
@@ -235,7 +343,7 @@ pub async fn process_rbxlx_file(
                 write_tx.send(ToWrite::XmlEvent(e)).unwrap();
             }
             Err(e) => {
-                eprintln!("Error: {e}");
+                eprintln!("xml parsing error at event #{}: {e}", event_count);
                 return Err(e.into());
             }
         }
