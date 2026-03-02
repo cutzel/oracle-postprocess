@@ -192,7 +192,7 @@ pub async fn process_rbxlx_file(
                                 panic!("Write error: {e}");
                             }
                         }
-                        XmlEvent::ProcessingInstruction { .. } | XmlEvent::StartDocument { .. } => {
+                        XmlEvent::EndDocument | XmlEvent::ProcessingInstruction { .. } | XmlEvent::StartDocument { .. } => {
                             written_events_clone.fetch_add(1, Ordering::Relaxed);
                             continue
                         }
