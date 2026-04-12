@@ -9,7 +9,7 @@ pub fn is_bytecode(data: &[u8]) -> bool {
     header == [0x1b, b'L', b'u', b'a']
         || header == [0x1b, b'L', b'J', 0x1]
         || header == [0x1b, b'L', b'J', 0x2]
-        || matches!(first_byte, 3..=8)
+        || matches!(first_byte, 3..=9)
 }
 
 pub fn get_bytecode_from_file(
