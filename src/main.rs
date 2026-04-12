@@ -24,6 +24,10 @@ struct Args {
     /// Oracle decompiler url
     #[arg(long, default_value = "wss://oracle.mshq.dev/v1/ws")]
     base_url: String,
+
+    /// Oracle API version
+    #[arg(short = 'v', long)]
+    oracle_version: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -69,7 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let decompiler = Decompiler::new(&args.base_url, &key).await?;
+    let url = match args.oracle_version {
+        Some(v) => format!("{}?version={}", args.base_url, v),
+        None => args.base_url,
+    };
+    let decompiler = Decompiler::new(&url, &key).await?;
 
     let processing_start = Instant::now();
 
