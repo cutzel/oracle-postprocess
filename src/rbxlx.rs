@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicU32, AtomicU64, Ordering},
     Arc,
 };
 
@@ -27,15 +27,17 @@ struct Utf8BoundaryReader<R: Read> {
     pending: Vec<u8>,
     output: VecDeque<u8>,
     eof: bool,
+    bytes_read: Arc<AtomicU64>,
 }
 
 impl<R: Read> Utf8BoundaryReader<R> {
-    fn new(inner: R) -> Self {
+    fn new(inner: R, bytes_read: Arc<AtomicU64>) -> Self {
         Self {
             inner,
             pending: Vec::new(),
             output: VecDeque::new(),
             eof: false,
+            bytes_read,
         }
     }
 
@@ -49,6 +51,7 @@ impl<R: Read> Utf8BoundaryReader<R> {
         if read == 0 {
             self.eof = true;
         } else {
+            self.bytes_read.fetch_add(read as u64, Ordering::Relaxed);
             self.pending.extend_from_slice(&buf[..read]);
         }
 
@@ -130,6 +133,8 @@ pub async fn process_rbxlx_file(
     input_file: &str,
     output_file: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let file_size = std::fs::metadata(input_file)?.len();
+    let bytes_read = Arc::new(AtomicU64::new(0));
     let total_scripts = Arc::new(AtomicU32::new(0));
     let decompiled_count = Arc::new(AtomicU32::new(0));
     let total_events = Arc::new(AtomicU32::new(0));
@@ -248,38 +253,66 @@ pub async fn process_rbxlx_file(
     let total_events_clone = total_events.clone();
     let written_events_clone = written_events.clone();
     let reader_done_clone = reader_done.clone();
+    let bytes_read_clone = bytes_read.clone();
     let progress_handle = tokio::spawn(async move {
+        let file_size_mib = file_size as f64 / (1024.0 * 1024.0);
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
             interval.tick().await;
-            let decompiled = decompiled_count_clone.load(Ordering::Relaxed);
-            let total = total_scripts_clone_progress.load(Ordering::Relaxed);
-            let total_ev = total_events_clone.load(Ordering::Relaxed);
-            let written_ev = written_events_clone.load(Ordering::Relaxed);
             let is_reader_done = reader_done_clone.load(Ordering::Relaxed);
 
-            if total_ev > 0 {
-                let write_pct = (written_ev as f64 / total_ev as f64) * 100.0;
-                if total > 0 {
-                    let decompile_pct = (decompiled as f64 / total as f64) * 100.0;
+            if !is_reader_done {
+                let read = bytes_read_clone.load(Ordering::Relaxed);
+                let read_mib = read as f64 / (1024.0 * 1024.0);
+                let pct = (read as f64 / file_size as f64) * 100.0;
+                let scripts = total_scripts_clone_progress.load(Ordering::Relaxed);
+                let decompiled = decompiled_count_clone.load(Ordering::Relaxed);
+                if scripts > 0 {
                     println!(
-                        "xml: {}/{} ({:.1}%) | decompiled: {}/{} ({:.1}%)",
-                        written_ev, total_ev, write_pct, decompiled, total, decompile_pct
+                        "reading: {:.1}% ({:.1}/{:.1} MiB) | {} scripts found, {} decompiled",
+                        pct, read_mib, file_size_mib, scripts, decompiled
                     );
                 } else {
-                    println!("xml: {}/{} ({:.1}%)", written_ev, total_ev, write_pct);
+                    println!(
+                        "reading: {:.1}% ({:.1}/{:.1} MiB)",
+                        pct, read_mib, file_size_mib
+                    );
                 }
-            }
+            } else {
+                let decompiled = decompiled_count_clone.load(Ordering::Relaxed);
+                let total = total_scripts_clone_progress.load(Ordering::Relaxed);
+                let total_ev = total_events_clone.load(Ordering::Relaxed);
+                let written_ev = written_events_clone.load(Ordering::Relaxed);
 
-            if is_reader_done && written_ev >= total_ev && total_ev > 0 {
-                break;
+                let write_pct = if total_ev > 0 {
+                    (written_ev as f64 / total_ev as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let width = total_ev.to_string().len();
+                if total > 0 {
+                    let dec_pct = (decompiled as f64 / total as f64) * 100.0;
+                    println!(
+                        "writing: {:.1}% ({:>width$}/{}) events | decompiled: {:.1}% ({}/{})",
+                        write_pct, written_ev, total_ev, dec_pct, decompiled, total
+                    );
+                } else {
+                    println!(
+                        "writing: {:.1}% ({:>width$}/{}) events",
+                        write_pct, written_ev, total_ev
+                    );
+                }
+
+                if written_ev >= total_ev {
+                    break;
+                }
             }
         }
     });
 
     let input_file_handle = File::open(input_file)?;
     let file = BufReader::with_capacity(8 * 1024 * 1024, input_file_handle);
-    let utf8_reader = Utf8BoundaryReader::new(file);
+    let utf8_reader = Utf8BoundaryReader::new(file, bytes_read.clone());
     let parser = EventReader::new(utf8_reader);
 
     let mut event_count = 0u64;
