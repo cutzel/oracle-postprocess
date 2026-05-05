@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::{env, time::Instant};
+use std::{env, path::PathBuf, time::Instant};
 
 mod compiled;
 mod decompiler;
@@ -28,6 +28,14 @@ struct Args {
     /// Oracle API version
     #[arg(short = 'v', long)]
     oracle_version: Option<u32>,
+
+    /// Decompiler options as a JSON string
+    #[arg(long, conflicts_with = "decompiler_options_file")]
+    decompiler_options: Option<String>,
+
+    /// Path to a JSON file containing decompiler options
+    #[arg(long, conflicts_with = "decompiler_options")]
+    decompiler_options_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -73,11 +81,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let decompiler_options = match (args.decompiler_options, args.decompiler_options_file) {
+        (Some(json_str), _) => {
+            let value: serde_json::Value = serde_json::from_str(&json_str)
+                .map_err(|e| format!("invalid decompiler options json: {}", e))?;
+            Some(value)
+        }
+        (_, Some(path)) => {
+            let contents = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read decompiler options file: {}", e))?;
+            let value: serde_json::Value = serde_json::from_str(&contents)
+                .map_err(|e| format!("invalid json in decompiler options file: {}", e))?;
+            Some(value)
+        }
+        _ => None,
+    };
+
     let url = match args.oracle_version {
         Some(v) => format!("{}?version={}", args.base_url, v),
         None => args.base_url,
     };
-    let decompiler = Decompiler::new(&url, &key).await?;
+    let decompiler = Decompiler::new(&url, &key, decompiler_options).await?;
 
     let processing_start = Instant::now();
 

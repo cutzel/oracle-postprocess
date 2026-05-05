@@ -18,6 +18,7 @@ enum ToWrite {
     DecompilationResult {
         header: String,
         bytecode: Arc<str>,
+        bytecode_hash: String,
         rx: oneshot::Receiver<Result<String, String>>,
     },
 }
@@ -211,6 +212,7 @@ pub async fn process_rbxlx_file(
                 ToWrite::DecompilationResult {
                     header,
                     bytecode,
+                    bytecode_hash,
                     rx,
                 } => {
                     let result = match rx.await {
@@ -222,7 +224,17 @@ pub async fn process_rbxlx_file(
                     };
                     let result = match result {
                         Ok(it) => format!("-- decompilation:\n{}", it),
-                        Err(it) => format!("-- decompilation failed:\n-- {}", it),
+                        Err(it) => {
+                            use base64::{engine::general_purpose, Engine as _};
+                            if let Ok(raw) = general_purpose::STANDARD.decode(bytecode.as_bytes()) {
+                                let _ = std::fs::create_dir_all("failures");
+                                let path = format!("failures/{}.bin", bytecode_hash);
+                                if let Err(e) = std::fs::write(&path, &raw) {
+                                    eprintln!("error: failed to save failed bytecode to {}: {}", path, e);
+                                }
+                            }
+                            format!("-- decompilation failed:\n-- {}", it)
+                        }
                     };
                     let formatted_result = format!("{}{}\n\n{}\n", header, bytecode, result);
                     let escaped_result = formatted_result.replace("]]>", "]]]]><![CDATA[>");
@@ -354,6 +366,7 @@ pub async fn process_rbxlx_file(
                 let bytecode_len = bytecode.len() as u32;
 
                 let bytecode: Arc<str> = Arc::from(bytecode);
+                let bytecode_hash_for_writer = bytecode_hash.clone();
 
                 let request = DecompilationRequest {
                     bytecode: bytecode.clone(),
@@ -367,6 +380,7 @@ pub async fn process_rbxlx_file(
                     .send(ToWrite::DecompilationResult {
                         header,
                         bytecode,
+                        bytecode_hash: bytecode_hash_for_writer,
                         rx: dec_rx,
                     })
                     .unwrap();

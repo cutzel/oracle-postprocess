@@ -26,9 +26,6 @@ mod options;
 enum WebsocketServerboundMessage {
     #[serde(rename = "decompile")]
     Decompile { data: Vec<String> },
-    // i dont care about this thing existing!
-    // users, however, might!
-    #[allow(dead_code)]
     #[serde(rename = "options")]
     Options { options: DecompileOptions },
 }
@@ -59,7 +56,7 @@ pub struct Decompiler {
 const MAX_BYTES_IN_FLIGHT: u32 = 8 * 1024 * 1024; // 8 mib
 
 impl Decompiler {
-    pub async fn new(endpoint: &str, auth_token: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(endpoint: &str, auth_token: &str, options: Option<DecompileOptions>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut request = endpoint.into_client_request()?;
         request
             .headers_mut()
@@ -68,7 +65,7 @@ impl Decompiler {
         let ws_config = WebSocketConfig::default().max_frame_size(Some(512 * 1024 * 1024)).max_message_size(Some(512 * 1024 * 1024));
         let ws_connect = connect_async_with_config(request, Some(ws_config), false).await;
 
-        let ws_stream = match ws_connect {
+        let mut ws_stream = match ws_connect {
             Ok((ws_stream, _)) => ws_stream,
             Err(TungsteniteError::Http(e)) => {
                 if let Some(body) = e.body() {
@@ -83,6 +80,11 @@ impl Decompiler {
                 return Err(e.into());
             }
         };
+
+        if let Some(options) = options {
+            let message = serde_json::to_string(&WebsocketServerboundMessage::Options { options }).unwrap();
+            ws_stream.send(Message::Text(message.into())).await?;
+        }
 
         let (decompile_tx, decompile_rx) = mpsc::unbounded_channel::<DecompilationRequest>();
         let websocket_handle = tokio::spawn(Self::websocket_handler(ws_stream, decompile_rx));
