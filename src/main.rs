@@ -3,9 +3,11 @@ use std::{env, path::PathBuf, time::Instant};
 
 mod compiled;
 mod decompiler;
+mod folder;
 mod rbxlx;
 
 use decompiler::Decompiler;
+use folder::process_folder;
 use rbxlx::process_rbxlx_file;
 
 #[derive(Parser)]
@@ -59,6 +61,16 @@ enum Commands {
         /// Defaults to out.rbxlx
         #[arg(short, long, verbatim_doc_comment, default_value = "decompiled.lua")]
         output: String,
+    },
+    /// Process all bytecode files in a folder
+    Folder {
+        /// Input folder path
+        input: String,
+
+        /// Output folder path
+        /// Defaults to <input>_decompiled
+        #[arg(short, long, verbatim_doc_comment)]
+        output: Option<String>,
     },
 }
 
@@ -118,6 +130,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             std::fs::write(output, result)?;
+        }
+        Some(Commands::Folder { input, output }) => {
+            let output = output.clone().unwrap_or_else(|| {
+                let trimmed = input.trim_end_matches('/');
+                format!("{}_decompiled", trimmed)
+            });
+            process_folder(&decompiler, input, &output).await?;
         }
         None => {
             println!("Try passing in --help")
