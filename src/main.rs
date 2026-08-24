@@ -48,7 +48,7 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Process a binary .rbxl file without decoding non-script data
+    /// Process a binary .rbxl file
     Rbxl {
         /// Input file path
         input: String,
