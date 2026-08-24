@@ -9,11 +9,12 @@ pub fn is_bytecode(data: &[u8]) -> bool {
     header == [0x1b, b'L', b'u', b'a']
         || header == [0x1b, b'L', b'J', 0x1]
         || header == [0x1b, b'L', b'J', 0x2]
-        || matches!(first_byte, 3..=11)
+        || matches!(first_byte, 3..=14)
 }
 
 pub fn get_bytecode_from_file(
     filename: &str,
+    skip_luau_version_check: bool,
 ) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
     use base64::{engine::general_purpose, Engine as _};
     use std::fs;
@@ -21,14 +22,14 @@ pub fn get_bytecode_from_file(
     let file_contents = fs::read(filename)?;
 
     // check for direct bytecode
-    if is_bytecode(&file_contents) {
+    if skip_luau_version_check || is_bytecode(&file_contents) {
         let bytecode = general_purpose::STANDARD.encode(&file_contents);
         return Ok((bytecode, None));
     }
 
     // try decoding as base64
     if let Ok(decoded) = general_purpose::STANDARD.decode(&file_contents) {
-        if is_bytecode(&decoded) {
+        if skip_luau_version_check || is_bytecode(&decoded) {
             let bytecode = String::from_utf8_lossy(&file_contents).to_string();
             return Ok((bytecode, None));
         }

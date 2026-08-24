@@ -33,6 +33,10 @@ struct Args {
     #[arg(short = 'v', long)]
     oracle_version: Option<u32>,
 
+    /// Accept raw Luau bytecode with any version byte
+    #[arg(long, global = true)]
+    skip_luau_version_check: bool,
+
     /// Decompiler options as a JSON string
     #[arg(long, conflicts_with = "decompiler_options_file")]
     decompiler_options: Option<String>,
@@ -136,7 +140,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             process_rbxlx_file(&decompiler, input, output).await?;
         }
         Some(Commands::Single { input, output }) => {
-            let (bytecode, header) = compiled::get_bytecode_from_file(input)?;
+            let (bytecode, header) =
+                compiled::get_bytecode_from_file(input, args.skip_luau_version_check)?;
             let mut result = decompiler.decompile_single(&bytecode).await??;
 
             if let Some(header) = header {
@@ -150,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let trimmed = input.trim_end_matches('/');
                 format!("{}_decompiled", trimmed)
             });
-            process_folder(&decompiler, input, &output).await?;
+            process_folder(&decompiler, input, &output, args.skip_luau_version_check).await?;
         }
         None => {
             println!("Try passing in --help")

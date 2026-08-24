@@ -41,6 +41,7 @@ pub async fn process_folder(
     decompiler: &Decompiler,
     input_dir: &str,
     output_dir: &str,
+    skip_luau_version_check: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let input_path = Path::new(input_dir).canonicalize()?;
     let output_path = Path::new(output_dir);
@@ -53,7 +54,7 @@ pub async fn process_folder(
 
     for file in &all_files {
         let file_str = file.to_string_lossy();
-        let Ok((bytecode, header)) = get_bytecode_from_file(&file_str) else {
+        let Ok((bytecode, header)) = get_bytecode_from_file(&file_str, skip_luau_version_check) else {
             skipped += 1;
             continue;
         };
