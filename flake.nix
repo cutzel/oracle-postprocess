@@ -41,9 +41,36 @@
         // {
           inherit cargoArtifacts;
         });
+
+      windowsPkgs = import nixpkgs {
+        localSystem = system;
+        crossSystem = {
+          config = "x86_64-w64-mingw32";
+          libc = "msvcrt";
+        };
+      };
+      windowsCraneLib = crane.mkLib windowsPkgs;
+      windowsArgs = {
+        pname = "oracle-postprocess";
+        src = windowsCraneLib.cleanCargoSource ./.;
+        strictDeps = true;
+
+        nativeBuildInputs = with windowsPkgs; [
+          pkg-config
+        ];
+
+        buildInputs = with windowsPkgs; [
+          openssl
+        ];
+      };
+      windowsCargoArtifacts = windowsCraneLib.buildDepsOnly windowsArgs;
+      windows-exe = windowsCraneLib.buildPackage (windowsArgs
+        // {
+          cargoArtifacts = windowsCargoArtifacts;
+        });
     in {
       default = oracle-postprocess;
-      inherit oracle-postprocess;
+      inherit oracle-postprocess windows-exe;
     });
 
     devShells = forAllSystems (system: let
