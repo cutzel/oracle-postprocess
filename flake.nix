@@ -1,10 +1,13 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    crane.url = "github:ipetkov/crane";
   };
+
   outputs = {
     self,
     nixpkgs,
+    crane,
   }: let
     supportedSystems = ["x86_64-linux"];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -17,33 +20,50 @@
         ${pkgs.alejandra}/bin/alejandra .
       '');
 
-    packages = forAllSystems (
-      system: let
-        pkgs = nixpkgsFor.${system};
-      in {
-        oracle-postprocess = pkgs.buildRustPackage {
-          name = "oracle-postprocess";
-          src = ./.;
-        };
-      }
-    );
+    packages = forAllSystems (system: let
+      pkgs = nixpkgsFor.${system};
+      craneLib = crane.mkLib pkgs;
+      commonArgs = {
+        pname = "oracle-postprocess";
+        src = craneLib.cleanCargoSource ./.;
+        strictDeps = true;
 
-    devShells."x86_64-linux".default = let
-      pkgs = import nixpkgs {
-        system = "x86_64-linux";
+        nativeBuildInputs = with pkgs; [
+          pkg-config
+        ];
+
+        buildInputs = with pkgs; [
+          openssl
+        ];
       };
-    in
-      with pkgs;
-        mkShell {
-          nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
-            rustfmt
-            clippy
-            pkg-config
-            openssl
-          ];
-          RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
-        };
+      cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+      oracle-postprocess = craneLib.buildPackage (commonArgs
+        // {
+          inherit cargoArtifacts;
+        });
+    in {
+      default = oracle-postprocess;
+      inherit oracle-postprocess;
+    });
+
+    devShells = forAllSystems (system: let
+      pkgs = nixpkgsFor.${system};
+    in {
+      default = pkgs.mkShell {
+        nativeBuildInputs = with pkgs; [
+          rustc
+          cargo
+          rustfmt
+          clippy
+          pkg-config
+        ];
+
+        buildInputs = with pkgs; [
+          openssl
+        ];
+
+        RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
+      };
+    });
   };
 }

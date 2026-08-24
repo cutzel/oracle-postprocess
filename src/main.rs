@@ -4,10 +4,12 @@ use std::{env, path::PathBuf, time::Instant};
 mod compiled;
 mod decompiler;
 mod folder;
+mod rbxl;
 mod rbxlx;
 
 use decompiler::Decompiler;
 use folder::process_folder;
+use rbxl::process_rbxl_file;
 use rbxlx::process_rbxlx_file;
 
 #[derive(Parser)]
@@ -42,6 +44,15 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Process a binary .rbxl file without decoding non-script data
+    Rbxl {
+        /// Input file path
+        input: String,
+
+        /// Output file path
+        #[arg(short, long, verbatim_doc_comment, default_value = "processed.rbxl")]
+        output: String,
+    },
     /// Process a .rbxlx file
     Rbxlx {
         /// Input file path
@@ -118,6 +129,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let processing_start = Instant::now();
 
     match &args.command {
+        Some(Commands::Rbxl { input, output }) => {
+            process_rbxl_file(&decompiler, input, output).await?;
+        }
         Some(Commands::Rbxlx { input, output }) => {
             process_rbxlx_file(&decompiler, input, output).await?;
         }
