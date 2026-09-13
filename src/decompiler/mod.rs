@@ -53,7 +53,7 @@ pub struct Decompiler {
     _websocket_handle: tokio::task::JoinHandle<()>,
 }
 
-const MAX_BYTES_IN_FLIGHT: u32 = 8 * 1024 * 1024; // 8 mib
+const MAX_BYTES_IN_FLIGHT: u32 = 45 * 1024 * 1024; // 45 mib
 
 impl Decompiler {
     pub async fn new(endpoint: &str, auth_token: &str, options: Option<DecompileOptions>) -> Result<Self, Box<dyn std::error::Error>> {
